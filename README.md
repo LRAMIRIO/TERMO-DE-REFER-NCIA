@@ -1,2 +1,2 @@
-# TERMO-DE-REFER-NCIA
+# TERMO-DE-REFERENCIA
 Esse aplicativo transforma a requisição em PDF do SISREQ em planilha .xlsx que permite ser coloda diretamente no sistema do compras.gov.br
