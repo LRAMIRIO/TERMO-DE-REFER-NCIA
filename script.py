@@ -1,10 +1,10 @@
 import streamlit as st
 import pytesseract
-from pdf2image import convert_from_path
+import fitz  # PyMuPDF
 from PIL import Image
 import pandas as pd
 import re
-from io import BytesIO
+import io
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment, Font
@@ -86,14 +86,15 @@ def extrair_campos(texto, item_index):
         'VALOR TOTAL': vt,
     }
 
-def processar_pdf(pdf_bytes):
-    # Converter PDF em imagens
-    pages = convert_from_path(pdf_bytes, dpi=300)
-
-    # OCR + blocos por "Valor total"
+def processar_pdf(pdf_path):
+    doc = fitz.open(pdf_path)
     blocos, bloco = [], ""
-    for page in pages:
-        texto = pytesseract.image_to_string(page, lang='por')
+
+    for page in doc:
+        pix = page.get_pixmap(dpi=300)
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        texto = pytesseract.image_to_string(img, lang="por")
+
         for linha in texto.split('\n'):
             linha = linha.strip()
             if linha:
@@ -102,11 +103,9 @@ def processar_pdf(pdf_bytes):
                     blocos.append(bloco)
                     bloco = ""
 
-    # Processar blocos
     dados = [extrair_campos(bloco, idx) for idx, bloco in enumerate(blocos)]
     df_final = pd.DataFrame(dados)
 
-    # Criar planilha Excel formatada
     wb = Workbook()
     ws = wb.active
     ws.title = "ITENS"
@@ -125,7 +124,7 @@ def processar_pdf(pdf_bytes):
         row[5].number_format = row[6].number_format = moeda_fmt
         row[5].alignment = row[6].alignment = Alignment(horizontal="center")
 
-    output = BytesIO()
+    output = io.BytesIO()
     wb.save(output)
     return output.getvalue(), df_final
 
@@ -134,10 +133,8 @@ uploaded_file = st.file_uploader("📤 Envie um PDF", type=["pdf"])
 
 if uploaded_file:
     with st.spinner("⏳ Processando PDF..."):
-        # Salvar temporário
         with open("temp.pdf", "wb") as f:
             f.write(uploaded_file.read())
-
         excel_bytes, tabela = processar_pdf("temp.pdf")
 
     st.success("✅ Processamento concluído!")
