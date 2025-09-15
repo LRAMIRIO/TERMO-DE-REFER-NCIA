@@ -1,14 +1,18 @@
-# 📚 Importações
+import streamlit as st
 import pytesseract
 from pdf2image import convert_from_path
 from PIL import Image
 import pandas as pd
 import re
-import argparse
+from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment, Font
 
+st.set_page_config(page_title="PDF → Excel OCR", page_icon="📑", layout="wide")
+st.title("📑 Conversor PDF → Excel (OCR em Português)")
+
+# ========= Funções auxiliares =========
 def ajustar_texto(texto):
     texto = texto.strip().strip('"').strip("'")
     frases = re.split(r'(?<=[.!?])\s+', texto)
@@ -50,22 +54,28 @@ def extrair_campos(texto, item_index):
     def campo(regex):
         r = re.search(regex, texto, re.DOTALL | re.IGNORECASE)
         return r.group(1).strip().replace('\n', ' ') if r else ""
+
     linhas = texto.split("\n")
     unidade, qtd = extrair_unidade_e_quantidade(linhas)
     descricao = campo(r"Descrição detalhada\s*:? ?(.*?)Unidade")
     descricao = ajustar_texto(descricao)
+
     valor_unitario = campo(r"Valor unitário\s*:? ?R\$\s*([\d.,]+)").replace(".", "").replace(",", ".")
     valor_total = campo(r"Valor total\s*:? ?R\$\s*([\d.,]+)").replace(".", "").replace(",", ".")
+
     try:
         vu = float(valor_unitario)
     except:
         vu = None
+
     try:
         vt = float(valor_total)
     except:
         vt = None
+
     item = campo(r"Item\s*:? ?(\d+)")
     item = int(item) if item.isdigit() else item_index + 1
+
     return {
         'ITEM': item,
         'CATMAT': int(campo(r"CATMAT\s*:? ?(\d+)") or 0),
@@ -76,8 +86,11 @@ def extrair_campos(texto, item_index):
         'VALOR TOTAL': vt,
     }
 
-def main(pdf_path, output_path):
-    pages = convert_from_path(pdf_path, dpi=300)
+def processar_pdf(pdf_bytes):
+    # Converter PDF em imagens
+    pages = convert_from_path(pdf_bytes, dpi=300)
+
+    # OCR + blocos por "Valor total"
     blocos, bloco = [], ""
     for page in pages:
         texto = pytesseract.image_to_string(page, lang='por')
@@ -88,30 +101,51 @@ def main(pdf_path, output_path):
                 if "Valor total" in linha:
                     blocos.append(bloco)
                     bloco = ""
+
+    # Processar blocos
     dados = [extrair_campos(bloco, idx) for idx, bloco in enumerate(blocos)]
     df_final = pd.DataFrame(dados)
+
+    # Criar planilha Excel formatada
     wb = Workbook()
     ws = wb.active
     ws.title = "ITENS"
+
     for row in dataframe_to_rows(df_final, index=False, header=True):
         ws.append(row)
+
     moeda_fmt = '"R$"#,##0.00'
     for cell in ws[1]:
         cell.value = str(cell.value).upper()
         cell.alignment = Alignment(horizontal="center")
         cell.font = Font(bold=True)
+
     for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
         row[0].alignment = row[1].alignment = row[4].alignment = Alignment(horizontal="center")
         row[5].number_format = row[6].number_format = moeda_fmt
         row[5].alignment = row[6].alignment = Alignment(horizontal="center")
-    wb.save(output_path)
-    print(f"Arquivo salvo em: {output_path}")
 
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="Extrair itens de PDF via OCR")
-    parser.add_argument("pdf", help="Caminho do arquivo PDF de entrada")
-    parser.add_argument("-o", "--output", default="itens_extraidos_formatado_final.xlsx",
-                        help="Nome do arquivo de saída (Excel)")
-    args = parser.parse_args()
-    main(args.pdf, args.output)
+    output = BytesIO()
+    wb.save(output)
+    return output.getvalue(), df_final
+
+# ========= Interface =========
+uploaded_file = st.file_uploader("📤 Envie um PDF", type=["pdf"])
+
+if uploaded_file:
+    with st.spinner("⏳ Processando PDF..."):
+        # Salvar temporário
+        with open("temp.pdf", "wb") as f:
+            f.write(uploaded_file.read())
+
+        excel_bytes, tabela = processar_pdf("temp.pdf")
+
+    st.success("✅ Processamento concluído!")
+    st.dataframe(tabela)
+
+    st.download_button(
+        label="📥 Baixar Excel",
+        data=excel_bytes,
+        file_name="itens_extraidos.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
